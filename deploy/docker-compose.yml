@@ -1,0 +1,119 @@
+services:
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: events-kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_NUM_PARTITIONS: 6
+      CLUSTER_ID: "events-cluster-kraft-001"
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: events-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  downstream:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.downstream
+    container_name: events-downstream
+    ports:
+      - "8081:8081"
+    environment:
+      DOWNSTREAM_PORT: "8081"
+      DOWNSTREAM_FAIL_RATE: "0.02"
+      DOWNSTREAM_LATENCY_MS: "30"
+
+  consumer:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.consumer
+    deploy:
+      replicas: 3
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      KAFKA_TOPIC: "events"
+      KAFKA_GROUP_ID: "optimized-consumers"
+      REDIS_ADDR: "redis:6379"
+      DOWNSTREAM_URL: "http://downstream:8081/process"
+      RATE_LIMIT_RPS: "300"
+      BREAKER_THRESHOLD: "0.5"
+      BREAKER_WINDOW_SEC: "10"
+      METRICS_PORT: "9100"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  baseline-consumer:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.baseline-consumer
+    deploy:
+      replicas: 1
+    profiles: ["baseline"]
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      KAFKA_TOPIC: "events-baseline"
+      KAFKA_GROUP_ID: "baseline-consumers"
+      DOWNSTREAM_URL: "http://downstream:8081/process"
+      METRICS_PORT: "9101"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  producer:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.producer
+    container_name: events-producer
+    profiles: ["loadgen"]
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      KAFKA_TOPIC: "events"
+      PRODUCER_RATE_PER_SEC: "12"
+      PRODUCER_DUPLICATE_RATE: "0.05"
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    container_name: events-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: events-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer

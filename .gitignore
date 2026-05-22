@@ -1,0 +1,17 @@
+bin/
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Keep bench/reports JSON (evidence), gitignore CSVs & logs (large/transient)
+bench/reports/*.csv
+bench/reports/*.log
+bench/reports/*.jsonl
+bench/reports/*.html
+
+# Terraform state (private)
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate
+deploy/terraform/*.tfstate.*
+deploy/terraform/.terraform.lock.hcl
