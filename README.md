@@ -1,7 +1,9 @@
 # distributed-events
 
-A Kafka and Redis event pipeline in Go that gives a fragile downstream service
-at-most-once delivery, with a naive consumer alongside it as a measurable baseline.
+[![CI](https://github.com/jasonjesuraja06/distributed-events/actions/workflows/ci.yml/badge.svg)](https://github.com/jasonjesuraja06/distributed-events/actions/workflows/ci.yml)
+
+A Kafka and Redis event pipeline in Go that gives a fragile downstream service at-most-once
+delivery, with a naive consumer alongside it as a measurable baseline.
 
 ## Why
 
@@ -49,13 +51,11 @@ extrapolated beyond it except where the row says so.
 | P95 / P99 delivery latency, below the baseline's capacity | 0.097 s / 0.099 s | 0.097 s / 0.099 s | 90 s per lane, 15 events/s offered | `DURATION=90s RATE=15 WINDOW=2m make bench-latency` |
 | P50 / P95 delivery latency, above the baseline's capacity | 7.16 s / at least 10 s | 0.070 s / 0.097 s | same 25 events/s run as row 1, histograms read per lane | `bench/reports/latency-saturation-*.json` |
 | Calls issued into a downstream forced to 60% failure | 2211 attempts, 534 returned 5xx (24.2%) | 780 attempts, 223 returned 5xx (28.6%), 1288 more shed at the breaker | 30 s steady, 45 s spike at 40 events/s with chaos on, 30 s recovery, per lane | `PRE_DURATION=30s SPIKE_DURATION=45s POST_DURATION=30s RATE=10 BURST_RATE=40 make bench-chaos` |
-| Sustained ingest with consumers keeping up | not run | 24.0 events/s, 4320 events | 3 min, no backlog at the end | `DURATION=3m RATE=25 WINDOW=4m make bench-throughput` |
-| Consumer fleet availability | not run | 87 of 87 samples with all 3 replicas up | 3 min, 2 s sampling interval | `DURATION=3m INTERVAL=2 make bench-uptime` |
+| Sustained ingest with consumers keeping up | falls behind at this rate, see row 3 | 24.0 events/s, 4320 events | 3 min, no backlog at the end | `DURATION=3m RATE=25 WINDOW=4m make bench-throughput` |
+| Consumer fleet availability | n/a, the baseline lane runs one replica | 87 of 87 samples with all 3 replicas up | 3 min, 2 s sampling interval | `DURATION=3m INTERVAL=2 make bench-uptime` |
 | Median CPU / memory per replica | 4.25% / 21.8 MiB | 1.73% / 22.5 MiB | 95 s sample, 5 s interval, 25 events/s offered | `./scripts/capture-docker-stats.sh optimized 95 '^deploy-consumer-'`, then `make cost-model` |
 
-Reading these honestly:
-
-Below the baseline's capacity the two lanes have the same delivery latency,
+Reading these honestly. Below the baseline's capacity the two lanes have the same delivery latency,
 because latency there is the downstream's own 30 to 60 ms. The worker pool buys
 headroom, not per-event speed: rows 2 and 3 are the same code at 15 and at 25
 events/s. The 10 s figure is the top finite histogram bucket, a lower bound.
@@ -87,7 +87,10 @@ make stack-down
 Kafka advertises `kafka:19092` inside the compose network and `localhost:9092`
 for host tools. A `kafka-init` service creates the topics before any consumer
 starts: a group that joins a topic which does not exist yet is assigned zero
-partitions and stays that way until the next rebalance.
+partitions and stays that way until the next rebalance. CI
+(`.github/workflows/ci.yml`) runs gofmt, vet, build, `go test -race`, a compose
+config parse, and `bash -n` over the bench scripts; it does not run the
+benchmarks, which need the stack up and minutes of wall clock per number.
 
 ## Layout
 
@@ -97,8 +100,8 @@ partitions and stays that way until the next rebalance.
 `cmd/loadgen` load generator with duplicate injection and burst windows.
 `internal/` event type, Redis dedup, token bucket, breaker, metrics.
 `deploy/` compose stack, Prometheus config, distroless Dockerfiles, S3 policy.
-`scripts/` benchmark drivers, docker stats capture, cost model.
-`bench/reports/` committed output behind every number above.
+`scripts/` benchmark drivers, docker stats capture, cost model. `bench/reports/`
+committed output behind every number above.
 
 ## Limitations
 
@@ -110,10 +113,7 @@ them. Dedup holds within the 1 hour TTL only. The latency histogram tops out at
 which is a lower bound rather than a measurement. The S3 lifecycle policy in
 `deploy/terraform/` has never been applied and its cost comment is an
 explicitly hypothetical sizing exercise. Full list in
-[docs/limitations.md](docs/limitations.md). CI
-(`.github/workflows/ci.yml`) runs gofmt, vet, build, `go test -race`, and a
-compose config parse; it does not run the benchmarks, which need the stack up
-and minutes of wall clock per number.
+[docs/limitations.md](docs/limitations.md).
 
 ## License
 
