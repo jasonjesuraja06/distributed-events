@@ -22,16 +22,19 @@ func TestAllowDrainsTheBurstThenRefuses(t *testing.T) {
 }
 
 func TestAllowRefillsAtTheConfiguredRate(t *testing.T) {
-	l := New(100, 1) // 100/sec => one token every 10ms
+	// 10/sec means one token every 100ms. The interval is deliberately long so
+	// the "still empty" assertion cannot be lost to scheduler delay between two
+	// consecutive statements on a loaded machine.
+	l := New(10, 1)
 	if !l.Allow() {
 		t.Fatal("first call should consume the initial burst token")
 	}
 	if l.Allow() {
 		t.Fatal("second immediate call should find the bucket empty")
 	}
-	time.Sleep(40 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 	if !l.Allow() {
-		t.Fatal("bucket should have refilled after 40ms at 100/sec")
+		t.Fatal("bucket should have refilled after 150ms at 10/sec")
 	}
 }
 
