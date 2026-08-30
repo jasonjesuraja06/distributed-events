@@ -1,0 +1,39 @@
+=== BASELINE: feeding events-baseline topic for 90s ===
+2026/08/29 20:17:31 loadgen produced=60 duplicates=8 rate=15
+2026/08/29 20:17:36 loadgen produced=120 duplicates=14 rate=15
+2026/08/29 20:17:41 loadgen produced=180 duplicates=19 rate=15
+2026/08/29 20:17:46 loadgen produced=240 duplicates=22 rate=15
+2026/08/29 20:17:51 loadgen produced=300 duplicates=29 rate=15
+2026/08/29 20:17:56 loadgen produced=360 duplicates=34 rate=15
+2026/08/29 20:18:01 loadgen produced=420 duplicates=43 rate=15
+2026/08/29 20:18:06 loadgen produced=480 duplicates=48 rate=15
+2026/08/29 20:18:11 loadgen produced=540 duplicates=54 rate=15
+2026/08/29 20:18:16 loadgen produced=600 duplicates=60 rate=15
+2026/08/29 20:18:21 loadgen produced=660 duplicates=64 rate=15
+2026/08/29 20:18:26 loadgen produced=720 duplicates=68 rate=15
+2026/08/29 20:18:31 loadgen produced=780 duplicates=79 rate=15
+2026/08/29 20:18:36 loadgen produced=840 duplicates=84 rate=15
+2026/08/29 20:18:41 loadgen produced=900 duplicates=88 rate=15
+2026/08/29 20:18:46 loadgen produced=960 duplicates=94 rate=15
+2026/08/29 20:18:51 loadgen produced=1020 duplicates=99 rate=15
+2026/08/29 20:18:56 loadgen produced=1080 duplicates=104 rate=15
+2026/08/29 20:18:56 DONE produced=1080 duplicates=104 duration=90.0s avg_rps=12.0
+=== OPTIMIZED: feeding events topic for 90s ===
+2026/08/29 20:19:31 loadgen produced=60 duplicates=3 rate=15
+2026/08/29 20:19:36 loadgen produced=120 duplicates=11 rate=15
+2026/08/29 20:19:41 loadgen produced=180 duplicates=23 rate=15
+2026/08/29 20:19:46 loadgen produced=240 duplicates=27 rate=15
+2026/08/29 20:19:51 loadgen produced=300 duplicates=35 rate=15
+2026/08/29 20:19:56 loadgen produced=360 duplicates=40 rate=15
+2026/08/29 20:20:01 loadgen produced=420 duplicates=44 rate=15
+2026/08/29 20:20:06 loadgen produced=480 duplicates=50 rate=15
+2026/08/29 20:20:11 loadgen produced=540 duplicates=57 rate=15
+2026/08/29 20:20:16 loadgen produced=600 duplicates=62 rate=15
+2026/08/29 20:20:21 loadgen produced=660 duplicates=66 rate=15
+2026/08/29 20:20:26 loadgen produced=720 duplicates=71 rate=15
+2026/08/29 20:20:31 loadgen produced=780 duplicates=74 rate=15
+2026/08/29 20:20:36 loadgen produced=840 duplicates=79 rate=15
+2026/08/29 20:20:41 loadgen produced=900 duplicates=87 rate=15
+2026/08/29 20:20:46 loadgen produced=960 duplicates=93 rate=15
+2026/08/29 20:20:51 loadgen produced=1020 duplicates=99 rate=15
+2026/08/29 20:20:56 DONE produced=1080 duplicates=107 duration=90.0s avg_rps=12.0

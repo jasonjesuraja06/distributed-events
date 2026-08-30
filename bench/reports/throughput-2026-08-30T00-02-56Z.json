@@ -1,0 +1,11 @@
+{
+  "avg_rps": 23.999936055770373,
+  "duration_seconds": 180.000479583,
+  "injected_duplicates": 191,
+  "per_day_extrapolated": 2073594.4752185603,
+  "produced": 4320,
+  "kafka_events_received_window": 4563.013697677652,
+  "downstream_delivered_window": 4285.229557780559,
+  "promql_range_window": "4m",
+  "sustained_per_day_extrapolated": 2073594
+}

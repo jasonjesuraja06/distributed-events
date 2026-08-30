@@ -1,0 +1,13 @@
+{
+  "what": "P95 delivery latency at an offered rate above single-consumer capacity",
+  "source_run": "bench-dedup 2026-08-29T23-53-14Z, 25 events/s offered, 2 min per lane",
+  "promql_range": "2m",
+  "histogram_top_finite_bucket_seconds": 10.0,
+  "baseline_p50_seconds": 7.161796536796537,
+  "baseline_p95_seconds": 10.0,
+  "baseline_evaluated_at_unix": 1788047710,
+  "optimized_p50_seconds": 0.07040808724975822,
+  "optimized_p95_seconds": 0.09704080872497584,
+  "optimized_evaluated_at_unix": 1788047850,
+  "note": "A P95 equal to the top finite bucket means the quantile fell in the +Inf bucket: it is a lower bound, not a measurement."
+}

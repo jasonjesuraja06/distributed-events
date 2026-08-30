@@ -1,0 +1,10 @@
+{
+  "duration": "90s",
+  "promql_range_window": "2m",
+  "rate_per_sec": 15,
+  "baseline_p95_seconds": 0.09716833890746934,
+  "baseline_p99_seconds": 0.09943366778149387,
+  "optimized_p95_seconds": 0.09733012452967064,
+  "optimized_p99_seconds": 0.09946602490593413,
+  "p95_reduction_pct": -0.17
+}

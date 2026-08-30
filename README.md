@@ -1,170 +1,120 @@
 # distributed-events
 
-A queue-backed event-processing platform in Go. Built on Kafka and Redis, designed for at-most-once delivery semantics, graceful degradation under downstream failure, and predictable per-event cost.
+A Kafka and Redis event pipeline in Go that gives a fragile downstream service
+at-most-once delivery, with a naive consumer alongside it as a measurable baseline.
 
-## Overview
+## Why
 
-Event-driven systems that fan out to fragile third-party APIs (notifications, webhooks, settlement services) routinely struggle with three problems:
+A consumer that fans out to a third-party API has three problems that look
+solved until traffic arrives. Producer retries and partition rebalances
+republish the same logical event, so the downstream acts on it twice. A worker
+pool that retries into a slowing downstream turns a slowdown into an outage.
+And nobody knows what a replica costs until someone measures one.
 
-1. **Duplicate delivery.** Producer retries, replay, and partition rebalancing all cause repeat messages. Without dedup, downstream sees the same event twice.
-2. **Cascading failures.** When the downstream slows or fails, a naive consumer pool pounds it harder and the outage spreads.
-3. **Cost creep.** Underutilized workers and uncompressed payload archives quietly burn money.
-
-This project provides a small, deployable reference implementation that addresses all three: idempotent consumers, rate limiting + circuit breakers, and a measured cost model with S3 lifecycle policies for archived payloads.
-
-## Features
-
-- **Kafka producer + consumer** in Go, using `segmentio/kafka-go` (pure Go, no CGO).
-- **Idempotent delivery** via Redis `SETNX` keyed on `IdempotencyKey`; dedup-window TTL is configurable.
-- **Token-bucket rate limiter** (`golang.org/x/time/rate`) protects the downstream.
-- **Circuit breaker** (`sony/gobreaker`) opens on failure-rate threshold and sheds load while downstream recovers.
-- **Connection-pooled HTTP** to downstream with keep-alive and bounded idle connections.
-- **Prometheus metrics** for received / deduped / delivered events, downstream errors, breaker open count, delivery latency, downstream latency, and health probes.
-- **Naive baseline consumer** ships alongside the optimized one to provide a real "before" measurement under identical workload.
-- **Load generator** with configurable sustained RPS, burst windows, and duplicate-injection rate.
-- **Benchmark suite** covering throughput, P95 latency, duplicate reduction, chaos resilience, and uptime.
-- **Cost model** that turns measured CPU/memory usage into monthly compute spend.
-- **Terraform** S3 lifecycle policy for tiered archival of historical event payloads.
+This implements one answer to each and ships a deliberately naive consumer on a
+parallel topic, so the difference is measured under identical load rather than
+asserted.
 
 ## Architecture
 
 ```
-                           +-----------+
-            producer ----> |   Kafka   | ----> consumers (worker pool, 3 replicas)
-            (loadgen)      |  (KRaft)  |        |   |   |
-                           +-----------+        v   v   v
-                                            +------------+
-                                            | dedup      |  -- Redis SETNX
-                                            +------------+
-                                            | rate limit |  -- token bucket
-                                            +------------+
-                                            | breaker    |  -- gobreaker
-                                            +------------+
-                                                  |
-                                                  v
-                                            downstream HTTP
-                                            (mock service with
-                                             chaos toggle)
+  loadgen --> topic "events" ---------> consumer x3, 16 workers each --+
+  (host)      (KRaft, 6 partitions)     dedup / rate limit / breaker   |
+                                                                       v
+  loadgen --> topic "events-baseline" -> baseline-consumer x1 -> mock downstream
+  (host)                                 sync, none of the above  latency + chaos
 
-   Prometheus scrapes /metrics on each consumer (port 9100/9101).
-   Grafana dashboards on :3000.
+  Prometheus discovers replicas by DNS, scrapes /metrics on 9100 and 9101.
 ```
 
-See [docs/architecture.md](docs/architecture.md) for the detailed component breakdown and design trade-offs.
+Each event carries an `IdempotencyKey`. A worker claims it with
+`SETNX dedup:<xxhash64 in hex> 1 EX 3600` before calling the downstream, and a
+worker that loses the race skips the call. Offsets are committed when the event
+enters the worker pool, before the downstream call, so a failed delivery is
+dropped rather than retried: that is what makes the semantics at-most-once.
+Component breakdown and trade-offs in
+[docs/architecture.md](docs/architecture.md).
 
-## Getting started
+## Measured results
 
-Requirements: Docker (with Compose v2), Go 1.26+, GNU Make, Python 3.11+ (for cost-model script).
+Hardware: Apple M4 Pro, 14 cores, 48 GB RAM, macOS arm64, Docker Desktop,
+single host. Every number below came from the command in its last column, and
+the raw JSON, logs, and CSVs are committed under `bench/reports/`. These are
+short runs; each row states the scope it was measured at and is not
+extrapolated beyond it except where the row says so.
+
+| Measurement | Baseline | Optimized | Scope | Reproduce |
+|---|---|---|---|---|
+| Duplicate downstream deliveries | 268 of 2823 | 0 of 2525 | 2 min per lane, 25 events/s offered, 10% duplicate injection | `DURATION=2m RATE=25 DUP_RATE=0.10 make bench-dedup` |
+| P95 / P99 delivery latency, below the baseline's capacity | 0.097 s / 0.099 s | 0.097 s / 0.099 s | 90 s per lane, 15 events/s offered | `DURATION=90s RATE=15 WINDOW=2m make bench-latency` |
+| P50 / P95 delivery latency, above the baseline's capacity | 7.16 s / at least 10 s | 0.070 s / 0.097 s | same 25 events/s run as row 1, histograms read per lane | `bench/reports/latency-saturation-*.json` |
+| Calls issued into a downstream forced to 60% failure | 2211 attempts, 534 returned 5xx (24.2%) | 780 attempts, 223 returned 5xx (28.6%), 1288 more shed at the breaker | 30 s steady, 45 s spike at 40 events/s with chaos on, 30 s recovery, per lane | `PRE_DURATION=30s SPIKE_DURATION=45s POST_DURATION=30s RATE=10 BURST_RATE=40 make bench-chaos` |
+| Sustained ingest with consumers keeping up | not run | 24.0 events/s, 4320 events | 3 min, no backlog at the end | `DURATION=3m RATE=25 WINDOW=4m make bench-throughput` |
+| Consumer fleet availability | not run | 87 of 87 samples with all 3 replicas up | 3 min, 2 s sampling interval | `DURATION=3m INTERVAL=2 make bench-uptime` |
+| Median CPU / memory per replica | 4.25% / 21.8 MiB | 1.73% / 22.5 MiB | 95 s sample, 5 s interval, 25 events/s offered | `./scripts/capture-docker-stats.sh optimized 95 '^deploy-consumer-'`, then `make cost-model` |
+
+Reading these honestly:
+
+Below the baseline's capacity the two lanes have the same delivery latency,
+because latency there is the downstream's own 30 to 60 ms. The worker pool buys
+headroom, not per-event speed: rows 2 and 3 are the same code at 15 and at 25
+events/s. The 10 s figure is the top finite histogram bucket, a lower bound.
+
+The breaker works by removing attempts, not by making attempts succeed, which
+is why the optimized lane's per-attempt error rate is slightly worse while it
+puts less than half the failing traffic on the downstream. Those 1288 shed
+calls are dropped events: with no replay path, protecting the downstream costs
+delivery. The ingest figure is offered load the consumers kept up with, not a saturation
+point. Three minutes of full availability says the fleet did not fall over in
+three minutes; it is not a 99.9% claim. The cost model turns measured container
+CPU and memory into EC2 list-price arithmetic, having never run on EC2.
+
+## Quickstart
+
+Requirements: Docker with Compose v2, Go 1.26+, GNU Make, Python 3.11+.
 
 ```bash
-make tidy          # download Go module dependencies
-make build         # compile binaries to bin/
-cd deploy && docker compose --profile baseline up -d --build
-cd ..
-```
-
-The stack brings up Kafka 3.9 (KRaft single-broker), Redis 7, Prometheus 3, Grafana 11, three replicas of the optimized consumer, one replica of the baseline consumer, and the mock downstream service.
-
-Visit:
-- Grafana: http://localhost:3000 (anonymous read access enabled)
-- Prometheus: http://localhost:9090
-- Downstream stats: http://localhost:8081/stats
-
-## Usage
-
-Send a steady 12 events/sec for 5 minutes:
-
-```bash
-KAFKA_BROKERS=localhost:9092 KAFKA_TOPIC=events \
-  ./bin/loadgen --rate 12 --duration 5m --dup-rate 0.10
-```
-
-Drive a spike with 5x burst for 60 seconds in the middle of a run:
-
-```bash
-./bin/loadgen --rate 20 --duration 5m \
-  --burst-rate 100 --burst-for 60s --burst-after 90s
-```
-
-Inspect Redis dedup state:
-
-```bash
+make test        # unit tests under the race detector, no Docker needed
+make build
+make stack-up    # Kafka, Redis, Prometheus, 3 consumers, baseline, downstream
+./bin/loadgen --rate 25 --duration 2m --dup-rate 0.10
+curl -s localhost:8081/stats   # deliveries minus unique_keys is the duplicate count
 docker exec -it events-redis redis-cli --scan --pattern 'dedup:*' | head
+make bench-dedup # or bench-latency, bench-chaos, bench-throughput, bench-uptime
+make stack-down
 ```
 
-## Benchmarks
+Kafka advertises `kafka:19092` inside the compose network and `localhost:9092`
+for host tools. A `kafka-init` service creates the topics before any consumer
+starts: a group that joins a topic which does not exist yet is assigned zero
+partitions and stays that way until the next rebalance.
 
-Each benchmark is a script that drives a defined workload through both the optimized consumer and the naive baseline, then writes a JSON report under `bench/reports/`.
+## Layout
 
-```bash
-make bench-latency         # P95 delivery latency, before vs after
-make bench-dedup           # duplicate-delivery reduction
-make bench-chaos           # 5xx error rate during spike + chaos
-DURATION=24h make bench-throughput   # sustained throughput soak
-DURATION=24h make bench-uptime       # uptime probe (DURATION=168h for 7-day)
-make cost-model            # CPU/mem -> monthly compute cost CSV
-make bench-all             # everything except long soaks
-```
+`cmd/consumer` worker pool, dedup, rate limit, breaker, keep-alive.
+`cmd/baseline-consumer` synchronous, none of the above, on a parallel topic.
+`cmd/downstream` mock downstream with artificial latency and a chaos toggle.
+`cmd/loadgen` load generator with duplicate injection and burst windows.
+`internal/` event type, Redis dedup, token bucket, breaker, metrics.
+`deploy/` compose stack, Prometheus config, distroless Dockerfiles, S3 policy.
+`scripts/` benchmark drivers, docker stats capture, cost model.
+`bench/reports/` committed output behind every number above.
 
-Reference performance (from a 2026-05 dry-run on Apple Silicon M3, single-host Docker):
+## Limitations
 
-| Metric | Baseline | Optimized |
-|---|---|---|
-| P95 delivery latency | ~2.0s | ~0.4s |
-| Duplicate downstream deliveries (10% dup rate input) | matches input ~10% | <0.5% |
-| 5xx error count during 5x spike with 60% downstream fail rate | 100% reference | ~65% of reference |
-| Steady-state replicas required | 6 | 3 |
-
-Reproduce on your own hardware with `make bench-all`; reports land in `bench/reports/*.json`.
-
-## Cost model
-
-`scripts/cost_model.py` reads `docker stats` snapshots captured during a benchmark and projects monthly cost using pinned AWS on-demand pricing (`us-east-1`, see comment block in the script). The S3 lifecycle policy in `deploy/terraform/s3-lifecycle.tf` tiers archived payloads through STANDARD → STANDARD_IA → GLACIER_IR → DEEP_ARCHIVE; the pricing math in the trailing comment block estimates ~$80/mo savings on a 15 TB archive.
-
-## Project layout
-
-```
-cmd/
-  producer/             realistic producer (runs in stack)
-  consumer/             optimized consumer: worker pool + dedup + ratelimit + breaker + keep-alive
-  baseline-consumer/    naive consumer: sync, no dedup, no breaker, no keep-alive
-  loadgen/              load generator: configurable RPS, duration, dup-rate, burst windows
-  downstream/           mock downstream HTTP service with chaos toggle
-
-internal/
-  queue/                Event type and (de)serialization
-  idempotency/          Redis SETNX dedup
-  ratelimit/            token bucket
-  breaker/              gobreaker wrapper
-  metrics/              Prometheus counters + histograms + /metrics + /healthz
-
-deploy/
-  docker-compose.yml
-  prometheus.yml
-  Dockerfile.*          per-service distroless builds
-  terraform/            S3 lifecycle policy
-
-scripts/
-  bench-*.sh            benchmark drivers
-  cost_model.py         compute-cost projection
-  capture-docker-stats.sh
-  auto-replay.sh        DLQ replay automation
-  auto-classify.py      classifies DLQ messages retriable vs permanent
-
-docs/
-  architecture.md       component breakdown and trade-offs
-  runbook.md            operations procedures (manual and automated paths)
-  limitations.md        current scope and roadmap
-```
-
-## Operations
-
-See [docs/runbook.md](docs/runbook.md) for operational procedures (duplicate audit, DLQ replay, rate-limit tuning, cost-control audit, health monitoring), each documented in both manual and automated forms.
-
-## Scope and roadmap
-
-See [docs/limitations.md](docs/limitations.md) for current scope and known gaps.
+Single-broker Kafka, single-node Redis, one host. No dead-letter topic and no
+replay: a failed downstream call drops the event. The rate limit is per
+replica, so three replicas at `RATE_LIMIT_RPS=300` can offer 900 RPS between
+them. Dedup holds within the 1 hour TTL only. The latency histogram tops out at
+10 s, so a consumer far enough behind reports a P95 pinned at that boundary,
+which is a lower bound rather than a measurement. The S3 lifecycle policy in
+`deploy/terraform/` has never been applied and its cost comment is an
+explicitly hypothetical sizing exercise. Full list in
+[docs/limitations.md](docs/limitations.md). CI
+(`.github/workflows/ci.yml`) runs gofmt, vet, build, `go test -race`, and a
+compose config parse; it does not run the benchmarks, which need the stack up
+and minutes of wall clock per number.
 
 ## License
 
-MIT (see LICENSE).
+MIT, see [LICENSE](LICENSE).

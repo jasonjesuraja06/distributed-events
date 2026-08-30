@@ -1,0 +1,18 @@
+{
+  "pre_duration": "30s",
+  "spike_duration": "45s",
+  "post_duration": "30s",
+  "promql_range_window": "8m",
+  "rate_steady": 10,
+  "rate_burst": 40,
+  "baseline_5xx": 534.5616686947112,
+  "optimized_5xx": 223.3241734961003,
+  "baseline_delivered": 1676.4419817854932,
+  "optimized_delivered": 556.7945772535155,
+  "baseline_attempts": 2211.0036504802047,
+  "optimized_attempts": 780.1187507496159,
+  "baseline_5xx_rate_pct": 24.177,
+  "optimized_5xx_rate_pct": 28.627,
+  "optimized_breaker_rejects": 1288.1002700658016,
+  "note": "raw 5xx counts are not comparable across lanes; the lanes attempt different numbers of calls in the same window"
+}

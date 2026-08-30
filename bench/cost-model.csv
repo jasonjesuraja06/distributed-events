@@ -1,0 +1,8 @@
+,baseline,optimized
+replicas,3,3
+median_cpu_percent_per_replica,4.25,1.73
+median_mem_mib_per_replica,21.8,22.48
+fleet_vcpu_steady,0.128,0.052
+fleet_gib_steady,0.064,0.066
+compute_$_per_month,2.16,0.95
+compute_$_per_month_diff,,-1.2

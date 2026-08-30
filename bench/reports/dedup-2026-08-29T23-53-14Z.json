@@ -1,0 +1,9 @@
+{
+  "baseline_deliveries": 2823,
+  "baseline_unique_keys": 2555,
+  "baseline_duplicate_deliveries": 268,
+  "optimized_deliveries": 2525,
+  "optimized_unique_keys": 2525,
+  "optimized_duplicate_deliveries": 0,
+  "duplicate_reduction_pct": 100.0
+}

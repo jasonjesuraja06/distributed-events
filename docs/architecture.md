@@ -38,10 +38,10 @@ Topic creation has to precede group formation. A kafka-go consumer group that jo
 
 Pulls from Kafka and fans messages out to a worker pool (16 goroutines per replica × 3 replicas = 48 concurrent workers). Each worker pipelines four steps:
 
-1. **Dedup claim** — `SETNX dedup:<xxhash64(IdempotencyKey) as 16 hex digits> 1 EX <TTL>`. If the key already exists, the worker drops the message: another worker already claimed it. The dedup TTL defaults to 1h.
-2. **Rate limit** — `golang.org/x/time/rate` token bucket caps outbound RPS to the configured budget.
-3. **Circuit breaker** — `sony/gobreaker` wraps the downstream call. The breaker opens when the rolling failure rate crosses the configured threshold (default 50% over the last `BREAKER_WINDOW_SEC` seconds with at least `RATE_LIMIT_RPS / 5` requests), stays open for the configured duration, then half-opens on a single trial.
-4. **Downstream call** — HTTP POST through a shared `http.Client` with keep-alive, a 200-connection idle pool, and a 3s timeout. Failed calls release the dedup slot so a later publish of the same key can re-attempt.
+1. **Dedup claim**: `SETNX dedup:<xxhash64(IdempotencyKey) as 16 hex digits> 1 EX <TTL>`. If the key already exists, the worker drops the message: another worker already claimed it. The dedup TTL defaults to 1h.
+2. **Rate limit**: `golang.org/x/time/rate` token bucket caps outbound RPS to the configured budget.
+3. **Circuit breaker**: `sony/gobreaker` wraps the downstream call. The breaker opens when the rolling failure rate crosses the configured threshold (default 50% over the last `BREAKER_WINDOW_SEC` seconds with at least `RATE_LIMIT_RPS / 5` requests), stays open for the configured duration, then half-opens on a single trial.
+4. **Downstream call**: HTTP POST through a shared `http.Client` with keep-alive, a 200-connection idle pool, and a 3s timeout. Failed calls release the dedup slot so a later publish of the same key can re-attempt.
 
 Offsets are committed when the event is handed to the worker pool, before the downstream call. A failed delivery is therefore dropped rather than retried, which is what makes the semantics at-most-once.
 

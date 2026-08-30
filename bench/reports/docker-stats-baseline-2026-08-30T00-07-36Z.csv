@@ -1,0 +1,15 @@
+ts,name,cpu_perc,mem_mib
+1788048458,deploy-baseline-consumer-1,2.58,22.64
+1788048464,deploy-baseline-consumer-1,2.80,21.61
+1788048471,deploy-baseline-consumer-1,2.63,21.86
+1788048478,deploy-baseline-consumer-1,1.91,22.57
+1788048485,deploy-baseline-consumer-1,3.16,20.77
+1788048492,deploy-baseline-consumer-1,2.50,21.23
+1788048499,deploy-baseline-consumer-1,5.44,21.31
+1788048506,deploy-baseline-consumer-1,4.96,21.89
+1788048513,deploy-baseline-consumer-1,4.25,21.75
+1788048520,deploy-baseline-consumer-1,4.26,22.3
+1788048527,deploy-baseline-consumer-1,5.00,21.62
+1788048534,deploy-baseline-consumer-1,4.99,22.3
+1788048541,deploy-baseline-consumer-1,4.48,21.54
+1788048548,deploy-baseline-consumer-1,4.92,21.91

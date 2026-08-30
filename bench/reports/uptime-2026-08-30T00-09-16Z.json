@@ -1,0 +1,13 @@
+{
+  "duration_requested": "3m",
+  "elapsed_seconds": 181,
+  "interval_seconds": 2,
+  "expected_consumer_replicas": 3,
+  "consumer_samples_all_replicas_up": 87,
+  "consumer_samples_degraded": 0,
+  "consumer_samples_total": 87,
+  "consumer_availability_pct": 100.0,
+  "downstream_probes_ok": 87,
+  "downstream_probes_fail": 0,
+  "downstream_availability_pct": 100.0
+}
