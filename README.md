@@ -5,7 +5,7 @@
 A Kafka and Redis event pipeline in Go that gives a fragile downstream service at-most-once
 delivery, with a naive consumer alongside it as a measurable baseline.
 
-## Why
+## Why it is built this way
 
 A consumer that fans out to a third-party API has three problems that look
 solved until traffic arrives. Producer retries and partition rebalances
