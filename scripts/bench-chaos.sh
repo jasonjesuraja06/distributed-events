@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Chaos / spike benchmark.
 #
-# Drives a 5x traffic spike for 60s with the downstream's failure rate raised
-# to 60%. Measures 5xx errors and availability for each consumer pool over the
-# spike window so the breaker/rate-limiter effectiveness can be quantified.
+# Drives a traffic spike with the downstream's failure rate raised to 60% and
+# measures what each consumer lane does with it.
+#
+# Raw 5xx counts are NOT comparable across the two lanes: the optimized lane
+# runs 48 workers and the baseline runs one synchronous loop, so the baseline
+# attempts far fewer calls in the same window and records fewer errors for that
+# reason alone. The comparable figure is the 5xx rate per attempted delivery,
+# which is what this script reports alongside the raw counts.
 set -euo pipefail
 source "$(dirname "$0")/_common.sh"
 
@@ -55,30 +60,43 @@ sleep 30
 end=$(date +%s)
 window="${SPIKE_DURATION}"
 
-baseline_5xx=$(prom_query "sum(increase(downstream_errors_total{consumer=\"baseline\",kind=\"5xx\"}[10m]))")
-opt_5xx=$(prom_query "sum(increase(downstream_errors_total{consumer=\"optimized\",kind=\"5xx\"}[10m]))")
-opt_breaker=$(prom_query "sum(increase(breaker_open_total{consumer=\"optimized\"}[10m]))")
-baseline_delivered=$(prom_query "sum(increase(events_delivered_total{consumer=\"baseline\"}[10m]))")
-opt_delivered=$(prom_query "sum(increase(events_delivered_total{consumer=\"optimized\"}[10m]))")
+WINDOW="${WINDOW:-10m}"
+baseline_5xx=$(prom_query "sum(increase(downstream_errors_total{consumer=\"baseline\",kind=\"5xx\"}[${WINDOW}]))")
+opt_5xx=$(prom_query "sum(increase(downstream_errors_total{consumer=\"optimized\",kind=\"5xx\"}[${WINDOW}]))")
+opt_breaker=$(prom_query "sum(increase(breaker_open_total{consumer=\"optimized\"}[${WINDOW}]))")
+baseline_delivered=$(prom_query "sum(increase(events_delivered_total{consumer=\"baseline\"}[${WINDOW}]))")
+opt_delivered=$(prom_query "sum(increase(events_delivered_total{consumer=\"optimized\"}[${WINDOW}]))")
 
 python3 - <<PY
 import json
 b5 = float("${baseline_5xx}" or 0); o5 = float("${opt_5xx}" or 0)
-reduction = round((b5 - o5) / b5 * 100, 2) if b5 else None
-avail = round(float("${opt_delivered}") / (float("${opt_delivered}") + float("${opt_5xx}")) * 100, 3) if float("${opt_delivered}") else None
+bd = float("${baseline_delivered}" or 0); od = float("${opt_delivered}" or 0)
+brk = float("${opt_breaker}" or 0)
+
+def rate(errors, delivered):
+    # An attempt either delivered or returned 5xx. Breaker rejections are not
+    # attempts: the call never reached the downstream.
+    attempts = errors + delivered
+    return round(errors / attempts * 100, 3) if attempts else None
+
+b_rate, o_rate = rate(b5, bd), rate(o5, od)
 out = {
   "pre_duration": "${PRE_DURATION}",
   "spike_duration": "${SPIKE_DURATION}",
   "post_duration": "${POST_DURATION}",
+  "promql_range_window": "${WINDOW}",
   "rate_steady": ${RATE},
   "rate_burst": ${BURST_RATE},
   "baseline_5xx": b5,
   "optimized_5xx": o5,
-  "optimized_breaker_rejects": float("${opt_breaker}" or 0),
-  "baseline_delivered": float("${baseline_delivered}" or 0),
-  "optimized_delivered": float("${opt_delivered}" or 0),
-  "5xx_reduction_pct": reduction,
-  "optimized_availability_during_window_pct": avail,
+  "baseline_delivered": bd,
+  "optimized_delivered": od,
+  "baseline_attempts": b5 + bd,
+  "optimized_attempts": o5 + od,
+  "baseline_5xx_rate_pct": b_rate,
+  "optimized_5xx_rate_pct": o_rate,
+  "optimized_breaker_rejects": brk,
+  "note": "raw 5xx counts are not comparable across lanes; the lanes attempt different numbers of calls in the same window",
 }
 import pathlib
 pathlib.Path("${report}").write_text(json.dumps(out, indent=2))

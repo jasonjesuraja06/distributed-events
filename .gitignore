@@ -1,14 +1,11 @@
 bin/
-*.log
 .DS_Store
 .idea/
 .vscode/
 
-# Keep bench/reports JSON (evidence), gitignore CSVs & logs (large/transient)
-bench/reports/*.csv
-bench/reports/*.log
-bench/reports/*.jsonl
-bench/reports/*.html
+# bench/reports holds the evidence behind the README table: JSON summaries, the
+# driver logs they were derived from, and the docker stats samples the cost
+# model reads. All of it is committed so the numbers can be checked.
 
 # Terraform state (private)
 deploy/terraform/.terraform/

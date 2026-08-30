@@ -10,6 +10,7 @@ source "$(dirname "$0")/_common.sh"
 DURATION="${DURATION:-24h}"
 RATE="${RATE:-12}"
 DUP_RATE="${DUP_RATE:-0.05}"
+WINDOW="${WINDOW:-${DURATION}}"
 
 wait_for_prom
 wait_for_downstream
@@ -26,16 +27,17 @@ KAFKA_BROKERS=localhost:9092 KAFKA_TOPIC=events \
   --rate "${RATE}" --duration "${DURATION}" --dup-rate "${DUP_RATE}" \
   --report "${report}" 2>&1 | tee "${log}"
 
-received=$(prom_query 'sum(increase(events_received_total{consumer="optimized"}[24h]))')
-delivered=$(prom_query 'sum(increase(events_delivered_total{consumer="optimized"}[24h]))')
+received=$(prom_query "sum(increase(events_received_total{consumer=\"optimized\"}[${WINDOW}]))")
+delivered=$(prom_query "sum(increase(events_delivered_total{consumer=\"optimized\"}[${WINDOW}]))")
 echo "kafka_received=${received} downstream_delivered=${delivered}"
 
 python3 - <<PY
 import json, pathlib
 p = pathlib.Path("${report}")
 d = json.loads(p.read_text())
-d["kafka_events_received_24h"] = ${received}
-d["downstream_delivered_24h"] = ${delivered}
+d["kafka_events_received_window"] = ${received}
+d["downstream_delivered_window"] = ${delivered}
+d["promql_range_window"] = "${WINDOW}"
 d["sustained_per_day_extrapolated"] = round(d["per_day_extrapolated"])
 p.write_text(json.dumps(d, indent=2))
 print(json.dumps(d, indent=2))

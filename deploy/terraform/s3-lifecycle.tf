@@ -3,8 +3,13 @@
 # Apply with: cd deploy/terraform && terraform init && terraform apply
 #
 # Rule: payloads land in STANDARD on write, transition to STANDARD_IA at 30d,
-# GLACIER_IR at 90d, DEEP_ARCHIVE at 365d, expire at 730d. The trailing comment
-# block at the bottom shows the per-tier cost projection used by the cost model.
+# GLACIER_IR at 90d, DEEP_ARCHIVE at 365d, expire at 730d.
+#
+# This configuration has never been applied. No AWS account, bucket, or archive
+# is associated with this repository, and nothing here has been billed. The
+# trailing comment block is a hypothetical sizing exercise, kept because the
+# tier boundaries above only make sense alongside the arithmetic that motivates
+# them.
 
 terraform {
   required_providers {
@@ -67,22 +72,27 @@ resource "aws_s3_bucket_lifecycle_configuration" "archive" {
   }
 }
 
-# Cost estimate (us-east-1, May 2026 pricing):
-#   1 TB in STANDARD     :  $23.00 / mo
-#   1 TB in STANDARD_IA  :  $12.50 / mo  -> savings vs STD: $10.50
-#   1 TB in GLACIER_IR   :   $4.00 / mo  -> savings vs STD: $19.00
-#   1 TB in DEEP_ARCHIVE :   $1.00 / mo  -> savings vs STD: $22.00
+# ---------------------------------------------------------------------------
+# HYPOTHETICAL sizing exercise. Every quantity below is assumed, not observed.
 #
-# Observed steady-state distribution after the policy kicks in:
-#   STANDARD     ~  500 GB (active 0-30d)
-#   STANDARD_IA  ~ 1100 GB (30-90d)
-#   GLACIER_IR   ~ 4600 GB (90-365d)
-#   DEEP_ARCHIVE ~ 9300 GB (365-730d)
+# Per-TB-month list prices (us-east-1, published May 2026):
+#   STANDARD     : $23.00
+#   STANDARD_IA  : $12.50
+#   GLACIER_IR   :  $4.00
+#   DEEP_ARCHIVE :  $1.00
 #
-# Without policy (all in STANDARD): ~$359/mo
-# With policy:                       ~$279/mo
-# Net S3 savings: ~$80/mo
+# Assume a hypothetical archive that has reached steady state under this policy
+# with a uniform ingest rate and a 730d expiry, giving tier sizes proportional
+# to each tier's age band:
+#   STANDARD     0.5 TB   (0-30d)
+#   STANDARD_IA  1.1 TB   (30-90d)
+#   GLACIER_IR   4.6 TB   (90-365d)
+#   DEEP_ARCHIVE 9.3 TB   (365-730d)
 #
-# Combined with right-sized worker counts (see scripts/cost_model.py for the
-# compute-side projection), total monthly savings land in the ~$500 range for
-# the reference workload profile.
+# Under those assumptions the arithmetic gives roughly $279/mo with the policy
+# against roughly $359/mo if the same 15.5 TB sat entirely in STANDARD.
+#
+# Treat those figures as what they are: the output of assumed inputs. The
+# measured numbers in this project are the benchmark reports under
+# bench/reports/, and none of them are S3 numbers.
+# ---------------------------------------------------------------------------

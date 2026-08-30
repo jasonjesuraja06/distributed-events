@@ -10,6 +10,8 @@ set -euo pipefail
 source "$(dirname "$0")/_common.sh"
 
 DURATION="${DURATION:-15m}"
+# PromQL range must cover the lane that just ran, plus the settle time.
+WINDOW="${WINDOW:-${DURATION}}"
 RATE="${RATE:-20}"
 DUP_RATE="${DUP_RATE:-0.10}"
 
@@ -28,8 +30,8 @@ KAFKA_BROKERS=localhost:9092 KAFKA_TOPIC=events-baseline \
 
 sleep 30
 
-baseline_p95=$(prom_query 'histogram_quantile(0.95, sum(rate(delivery_latency_seconds_bucket{consumer="baseline"}[15m])) by (le))')
-baseline_p99=$(prom_query 'histogram_quantile(0.99, sum(rate(delivery_latency_seconds_bucket{consumer="baseline"}[15m])) by (le))')
+baseline_p95=$(prom_query "histogram_quantile(0.95, sum(rate(delivery_latency_seconds_bucket{consumer=\"baseline\"}[${WINDOW}])) by (le))")
+baseline_p99=$(prom_query "histogram_quantile(0.99, sum(rate(delivery_latency_seconds_bucket{consumer=\"baseline\"}[${WINDOW}])) by (le))")
 
 echo "=== OPTIMIZED: feeding events topic for ${DURATION} ===" | tee -a "${log}"
 KAFKA_BROKERS=localhost:9092 KAFKA_TOPIC=events \
@@ -38,13 +40,14 @@ KAFKA_BROKERS=localhost:9092 KAFKA_TOPIC=events \
 
 sleep 30
 
-opt_p95=$(prom_query 'histogram_quantile(0.95, sum(rate(delivery_latency_seconds_bucket{consumer="optimized"}[15m])) by (le))')
-opt_p99=$(prom_query 'histogram_quantile(0.99, sum(rate(delivery_latency_seconds_bucket{consumer="optimized"}[15m])) by (le))')
+opt_p95=$(prom_query "histogram_quantile(0.95, sum(rate(delivery_latency_seconds_bucket{consumer=\"optimized\"}[${WINDOW}])) by (le))")
+opt_p99=$(prom_query "histogram_quantile(0.99, sum(rate(delivery_latency_seconds_bucket{consumer=\"optimized\"}[${WINDOW}])) by (le))")
 
 python3 - <<PY
 import json
 out = {
   "duration": "${DURATION}",
+  "promql_range_window": "${WINDOW}",
   "rate_per_sec": ${RATE},
   "baseline_p95_seconds": float("${baseline_p95}" or 0),
   "baseline_p99_seconds": float("${baseline_p99}" or 0),

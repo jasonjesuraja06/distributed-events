@@ -3,21 +3,18 @@ global:
   evaluation_interval: 5s
 
 scrape_configs:
+  # The consumer service runs with replicas > 1 and therefore publishes no host
+  # port. Compose's embedded DNS returns one A record per replica for the
+  # service name, so DNS service discovery scrapes every replica; a static
+  # target would resolve to whichever single replica the resolver returned.
   - job_name: "consumer"
     dns_sd_configs:
-      - names: ["tasks.consumer"]
+      - names: ["consumer"]
         type: A
         port: 9100
-    static_configs:
-      - targets:
-          - "consumer:9100"
 
   - job_name: "baseline-consumer"
-    static_configs:
-      - targets:
-          - "baseline-consumer:9101"
-
-  - job_name: "downstream"
-    static_configs:
-      - targets:
-          - "downstream:8081"
+    dns_sd_configs:
+      - names: ["baseline-consumer"]
+        type: A
+        port: 9101

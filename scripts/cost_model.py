@@ -11,8 +11,13 @@ How to use:
      lane (baseline vs optimized), projects to AWS EC2 instance hours, and
      computes monthly cost using pinned on-demand pricing (see constants below).
 
+This projects measured container CPU and memory onto rented-instance prices. It
+is a sizing arithmetic exercise on top of real local measurements, not a bill
+from a running deployment: nothing in this repository has ever run on EC2.
+
 Output: a CSV table comparing baseline and optimized monthly spend, plus a
-machine-readable summary on stderr.
+machine-readable summary on stderr. Exits non-zero when the input CSVs are
+missing, rather than printing numbers that were not measured.
 """
 from __future__ import annotations
 
@@ -24,12 +29,18 @@ import sys
 
 REPORTS = pathlib.Path(__file__).resolve().parent.parent / "bench" / "reports"
 
-# Conservative AWS public on-demand pricing (us-east-1, May 2026 snapshot).
-# Update via: aws ec2 describe-spot-price-history / pricing API and pin the date.
-PRICE_PER_VCPU_HOUR_USD = 0.0218  # m7i.large on-demand: $0.1008/h for 2 vCPU + 8 GiB ~= $0.0218/vCPU-h equivalent
+# AWS public on-demand list prices, us-east-1, as published in May 2026. These
+# are inputs to the projection, not measurements; re-pin them before quoting.
+PRICE_PER_VCPU_HOUR_USD = 0.0218  # m7i.large: $0.1008/h for 2 vCPU + 8 GiB, split per vCPU
 PRICE_PER_GIB_HOUR_USD = 0.0027   # m7i.large memory share
-S3_LIFECYCLE_SAVINGS_USD = 80     # measured separately: cold-tier transition for archived event logs
 HOURS_PER_MONTH = 730
+
+# Replica counts as deployed in deploy/docker-compose.yml. The baseline is
+# single-replica there; it is priced at the same replica count as the optimized
+# lane so the comparison isolates per-replica resource use rather than smuggling
+# in an unmeasured capacity assumption.
+BASELINE_REPLICAS = 3
+OPTIMIZED_REPLICAS = 3
 
 
 def load_stats(pattern: str) -> tuple[float, float] | None:
@@ -67,25 +78,17 @@ def main() -> None:
     optimized = load_stats("docker-stats-optimized-*.csv")
     if not baseline or not optimized:
         sys.stderr.write(
-            "WARN: missing docker-stats CSVs. Run bench-latency.sh first to populate them.\n"
-            "Falling back to placeholder values measured during the 2026-05 dry-run.\n"
+            "ERROR: no docker-stats CSVs under bench/reports/.\n"
+            "Run scripts/capture-docker-stats.sh for each lane first; this script\n"
+            "reports measured resource use and has no substitute for it.\n"
         )
-        baseline = (140.0, 220.0)   # baseline-consumer median CPU%, MiB (sync, no keep-alive)
-        optimized = (38.0, 95.0)    # optimized consumer median CPU%, MiB (worker pool, breaker, dedup)
-
-    # Workload is symmetric (same RPS). Baseline needs more replicas to keep up
-    # at peak; record both single-replica use AND the headroom-multiplier we
-    # need to add for spikes.
-    BASELINE_REPLICAS = 6   # measured -- baseline saturates earlier so we need more
-    OPTIMIZED_REPLICAS = 3  # measured -- optimized handles same load with less
+        sys.exit(1)
 
     b_vcpu, b_gib = instance_hours_needed(*baseline, BASELINE_REPLICAS)
     o_vcpu, o_gib = instance_hours_needed(*optimized, OPTIMIZED_REPLICAS)
     b_cost = monthly_cost(b_vcpu, b_gib)
     o_cost = monthly_cost(o_vcpu, o_gib)
     raw_delta = b_cost - o_cost
-
-    total_savings = raw_delta + S3_LIFECYCLE_SAVINGS_USD
 
     rows = [
         ["", "baseline", "optimized"],
@@ -95,8 +98,7 @@ def main() -> None:
         ["fleet_vcpu_steady", round(b_vcpu, 3), round(o_vcpu, 3)],
         ["fleet_gib_steady", round(b_gib, 3), round(o_gib, 3)],
         ["compute_$_per_month", round(b_cost, 2), round(o_cost, 2)],
-        ["s3_lifecycle_$_per_month", 0, -S3_LIFECYCLE_SAVINGS_USD],
-        ["total_$_per_month_diff", "", round(-total_savings, 2)],
+        ["compute_$_per_month_diff", "", round(-raw_delta, 2)],
     ]
     writer = csv.writer(sys.stdout)
     for row in rows:
@@ -104,8 +106,6 @@ def main() -> None:
 
     json.dump({
         "monthly_compute_savings_usd": round(raw_delta, 2),
-        "monthly_s3_lifecycle_savings_usd": S3_LIFECYCLE_SAVINGS_USD,
-        "monthly_total_savings_usd": round(total_savings, 2),
         "ec2_pricing_vcpu_hour_usd": PRICE_PER_VCPU_HOUR_USD,
         "ec2_pricing_gib_hour_usd": PRICE_PER_GIB_HOUR_USD,
         "baseline_median_cpu_pct": baseline[0],
