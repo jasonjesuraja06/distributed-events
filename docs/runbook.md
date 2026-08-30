@@ -1,61 +1,98 @@
 # Operations Runbook
 
-This document covers routine operational procedures for the event-processing platform. Each procedure has both a manual path (for incident response or initial onboarding) and an automated path (the default in steady state).
+Procedures for running the stack. This project has never been operated in
+production, so nothing here carries incident frequencies, time-per-occurrence
+figures, or savings claims. What follows is the procedure and the command, and
+where the code implements the automated path, the file that implements it.
 
 ## 1. Duplicate-delivery audit
 
-**Manual.** Pull the last 24h of downstream logs, group by `idempotency_key`, flag any key with `count > 1`, generate an incident ticket per affected user, send an apology email.
+**What the system does.** `internal/idempotency/redis_dedup.go` claims a Redis
+key per `IdempotencyKey` with `SETNX` before the downstream call. A consumer
+that loses the race increments `events_deduped_total` and returns without
+calling downstream, so the duplicate never reaches the downstream service.
 
-- ~6 steps per occurrence, ~12 minutes per occurrence
-- Observed frequency: ~30/week at 1M events/day with 5% true duplicate rate
+**Manual audit.** Compare what the load generator injected against what the
+downstream actually saw:
 
-**Automated.** `internal/idempotency/redis_dedup.go` suppresses duplicates at the consumer before they reach downstream. `scripts/auto-dup-report.sh` (planned) generates a daily audit summary from Prometheus.
+```bash
+curl -s localhost:8081/stats        # {"deliveries":N,"unique_keys":M}
+```
 
-## 2. Failed-delivery replay
+`deliveries - unique_keys` is the number of duplicate downstream calls over the
+window since the last `POST /reset`. `scripts/bench-dedup.sh` automates exactly
+this comparison across both consumer lanes.
 
-**Manual.** Pull the dead-letter topic, classify each message (retriable vs permanently failed), re-publish retriables to the primary topic with `AttemptNumber` incremented, file Jira tickets for permanent failures.
+**Inspect live dedup state.**
 
-- ~5 steps per occurrence, ~3 minutes per occurrence
-- Observed frequency: ~50 messages/week post-spike (typically 1–2 spikes/week)
+```bash
+docker exec -it events-redis redis-cli --scan --pattern 'dedup:*' | head
+docker exec -it events-redis redis-cli dbsize
+```
 
-**Automated.** `scripts/auto-replay.sh` drains the DLQ; `scripts/auto-classify.py` partitions messages by error category and bumps `AttemptNumber` up to `MAX_ATTEMPTS` (default 3). Retriables are re-published; permanents land in a separate archive.
+## 2. Failed deliveries
+
+There is no dead-letter topic and no replay path. The consumer commits the
+Kafka offset when the event is handed to the worker pool, so an event whose
+downstream call fails is dropped, counted in
+`downstream_errors_total{kind="5xx"|"network"|"4xx"}`, and not retried. This is
+the at-most-once semantics the project is built around; if you need
+at-least-once, the offset commit has to move after the downstream call and a
+retry topic has to exist.
+
+The one thing the consumer does on failure is release the dedup slot
+(`Deduper.Release`), so a later publish of the same `IdempotencyKey` is not
+suppressed by the failed attempt.
+
+**Check the failure counters.**
+
+```bash
+curl -s 'localhost:9090/api/v1/query' \
+  --data-urlencode 'query=sum by (consumer, kind) (downstream_errors_total)'
+```
 
 ## 3. Rate-limit tuning
 
-**Manual.** When downstream RPS budget changes, drain queues, run a probe to identify the new safe RPS via binary search, update `RATE_LIMIT_RPS`, redeploy, monitor for an hour.
+`RATE_LIMIT_RPS` (default 300) sets the token-bucket rate per consumer replica;
+burst is twice the rate. It also sets the circuit breaker's minimum request
+count before the breaker will evaluate its failure rate (`RATE_LIMIT_RPS / 5`,
+see `cmd/consumer/main.go`), so lowering the rate limit also lowers the number
+of requests the breaker needs before it can trip.
 
-- ~8 steps, ~2 hours per occurrence
-- Observed frequency: ~1/week
+To change it, edit the `consumer` service environment in
+`deploy/docker-compose.yml` and recreate the service:
 
-**Automated.** The breaker auto-sheds during failure so manual retuning isn't time-critical. `scripts/auto-tune.sh` (planned) recommends a new RPS weekly from the past week's success-rate distribution.
+```bash
+cd deploy && docker compose up -d --force-recreate consumer
+```
 
-## 4. Cost-control audit
+## 4. Cost model
 
-**Manual.** Pull CloudWatch utilization data, generate a report, draft a migration ticket for misallocated instances, run the S3 archive rotation script, verify.
+`scripts/cost_model.py` reads `docker stats` samples captured by
+`scripts/capture-docker-stats.sh` and projects measured CPU and memory onto
+published EC2 list prices. It exits non-zero when no samples exist rather than
+printing a number that was not measured.
 
-- ~5 steps, ~2 hours per occurrence
-- Frequency: 1/week
+```bash
+./scripts/capture-docker-stats.sh optimized 300 '^deploy-consumer-'
+./scripts/capture-docker-stats.sh baseline 300 '^deploy-baseline-consumer-'
+make cost-model
+```
 
-**Automated.** `deploy/terraform/s3-lifecycle.tf` handles S3 tiering automatically. `scripts/cost_model.py` ingests `docker stats` snapshots and emits a recommended worker count and instance type each week.
+The S3 lifecycle policy in `deploy/terraform/s3-lifecycle.tf` has never been
+applied; its cost comment is an explicitly hypothetical sizing exercise.
 
 ## 5. Health monitoring
 
-**Manual.** Eyeball Grafana dashboards twice daily for anomalies, acknowledge false-positive alerts.
+Prometheus discovers every consumer replica by DNS (`deploy/prometheus.yml`)
+and scrapes `/metrics` on 9100 (optimized) and 9101 (baseline). Each replica
+also serves `/healthz` on the same port. No alerting rules are configured.
 
-- ~30 min/day
+```bash
+curl -s 'localhost:9090/api/v1/targets?state=active' | python3 -m json.tool | head -40
+curl -s 'localhost:9090/api/v1/query' --data-urlencode 'query=up{job="consumer"}'
+```
 
-**Automated.** Tighter Prometheus alert thresholds (configured in `deploy/prometheus.yml`) reduce false positives. The breaker auto-recovers from transient downstream incidents without paging.
-
-## Time accounting
-
-The procedures above, fully manual, total approximately 15 person-hours per week at the operating point described (1M events/day, 5% duplicate rate, 1–2 traffic spikes/week, one major rate-limit change per week, weekly cost audit).
-
-With the automation in place, the remaining human work is approximately 1.2 person-hours per week: a daily five-minute glance at the auto-dup-report, a weekly review of the auto-replay log, and a weekly review of the cost model output. The remaining ~13.8 hours/week were previously spent on the manual steps above.
-
-Source measurements (timesheet log used to derive the figures above): place your own measurements in `bench/reports/ops-time-log-<period>.csv` to recompute for your environment.
-
-## Adding a new procedure
-
-1. Document the manual path here first.
-2. Implement automation in `scripts/auto-*.sh` (or extend the consumer if it can be in-line).
-3. Record the time delta in `bench/reports/ops-time-log-*.csv`.
+`scripts/bench-uptime.sh` samples `up{job="consumer"}` and the downstream
+`/healthz` on an interval and reports the fraction of samples in which every
+replica was up.
