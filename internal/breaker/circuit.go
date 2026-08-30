@@ -10,25 +10,29 @@ import (
 // Breaker wraps sony/gobreaker with our defaults: open when failure rate >= threshold
 // over a rolling window. Half-open after open-duration; closes after one success.
 //
-// Used to shed load from a failing downstream so consumers don't pile up retries
-// and so downstream gets time to recover. Directly responsible for the "~35% 5xx
-// reduction during spikes" measurement in the chaos benchmark.
+// Used to shed load from a failing downstream so consumers do not pile up
+// retries and so the downstream gets time to recover.
 type Breaker struct {
 	cb *gobreaker.CircuitBreaker
 }
 
 type Config struct {
-	Name               string
-	FailureRateOpen    float64       // open when failure rate >= this in window
-	WindowRequests     uint32        // min requests in window before counting
-	OpenDuration       time.Duration // how long to stay open before half-open
+	Name            string
+	FailureRateOpen float64       // open when failure rate >= this in window
+	WindowRequests  uint32        // min requests in window before the rate is evaluated
+	WindowInterval  time.Duration // how often the closed-state counts reset
+	OpenDuration    time.Duration // how long to stay open before half-open
 }
 
 func New(cfg Config) *Breaker {
+	// Interval must be set. gobreaker treats Interval <= 0 as "never clear the
+	// counts while closed", which turns the failure rate into a lifetime
+	// average: a process that has served hours of healthy traffic can then sit
+	// through a total downstream outage without ever crossing the threshold.
 	st := gobreaker.Settings{
 		Name:        cfg.Name,
 		MaxRequests: 1,
-		Interval:    0,
+		Interval:    cfg.WindowInterval,
 		Timeout:     cfg.OpenDuration,
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
 			if counts.Requests < cfg.WindowRequests {

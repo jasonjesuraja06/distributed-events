@@ -35,6 +35,7 @@ func main() {
 	rps := mustAtoi(envOr("RATE_LIMIT_RPS", "300"))
 	brkThresh, _ := strconv.ParseFloat(envOr("BREAKER_THRESHOLD", "0.5"), 64)
 	brkWindowSec := mustAtoi(envOr("BREAKER_WINDOW_SEC", "10"))
+	brkOpenSec := mustAtoi(envOr("BREAKER_OPEN_SEC", "10"))
 	metricsPort := envOr("METRICS_PORT", "9100")
 	workerCount := mustAtoi(envOr("WORKER_COUNT", "16"))
 	dedupTTLSec := mustAtoi(envOr("DEDUP_TTL_SEC", "3600"))
@@ -51,7 +52,8 @@ func main() {
 		Name:            "downstream",
 		FailureRateOpen: brkThresh,
 		WindowRequests:  uint32(rps / 5),
-		OpenDuration:    time.Duration(brkWindowSec) * time.Second,
+		WindowInterval:  time.Duration(brkWindowSec) * time.Second,
+		OpenDuration:    time.Duration(brkOpenSec) * time.Second,
 	})
 
 	// HTTP client with keep-alive + bounded connections (a key delta vs naive baseline).
@@ -74,7 +76,13 @@ func main() {
 		MinBytes:       1,
 		MaxBytes:       10 * 1024 * 1024,
 		CommitInterval: 100 * time.Millisecond,
-		StartOffset:    kafka.LastOffset,
+		StartOffset:    kafka.FirstOffset,
+		// Without this, a group that joins before its topic exists is assigned
+		// zero partitions and stays Stable with zero partitions forever: the
+		// group only re-evaluates the partition list on rebalance. Watching for
+		// partition changes forces a rejoin when partitions appear.
+		WatchPartitionChanges: true,
+		ErrorLogger:           kafka.LoggerFunc(log.Printf),
 	})
 	defer reader.Close()
 
@@ -87,7 +95,8 @@ func main() {
 		go worker(ctx, jobs, dedup, lim, cb, client, downstreamURL)
 	}
 
-	log.Printf("consumer brokers=%v topic=%s group=%s workers=%d rps=%d brkThresh=%.2f", brokers, topic, group, workerCount, rps, brkThresh)
+	log.Printf("consumer brokers=%v topic=%s group=%s workers=%d rps=%d brkThresh=%.2f brkWindow=%ds brkOpen=%ds",
+		brokers, topic, group, workerCount, rps, brkThresh, brkWindowSec, brkOpenSec)
 
 	for {
 		m, err := reader.FetchMessage(ctx)
@@ -138,8 +147,6 @@ func processEvent(
 	client *http.Client,
 	downstreamURL string,
 ) {
-	start := time.Now()
-
 	claimed, err := dedup.TryClaim(ctx, ev.IdempotencyKey)
 	if err != nil {
 		log.Printf("dedup error: %v (event=%s)", err, ev.EventID)
@@ -196,7 +203,19 @@ func processEvent(
 	}
 
 	metrics.EventsDelivered.WithLabelValues(consumerLabel).Inc()
-	metrics.DeliveryLatency.WithLabelValues(consumerLabel).Observe(time.Since(start).Seconds())
+	metrics.DeliveryLatency.WithLabelValues(consumerLabel).Observe(sinceEvent(ev.Timestamp))
+}
+
+// sinceEvent is the end-to-end age of an event at delivery time: the producer
+// stamps Timestamp before the Kafka write, so this covers queue wait plus all
+// in-consumer work. Producer and consumer run on different clocks, so a
+// negative reading (skew) is clamped to zero rather than recorded.
+func sinceEvent(stamped time.Time) float64 {
+	d := time.Since(stamped).Seconds()
+	if d < 0 {
+		return 0
+	}
+	return d
 }
 
 func envOr(k, def string) string {

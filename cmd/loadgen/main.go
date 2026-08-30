@@ -23,9 +23,10 @@ import (
 // configurable duplicate-injection rate. Used for every benchmark in bench/.
 //
 // Designed for sustained soak tests:
-//   --rate 12 --duration 24h   = 1,036,800 events (~1M events/day target)
-//   --rate 100 --duration 1h   = 360K events (faster verification)
-//   --rate 500 --burst-for 30s = chaos-spike test
+//
+//	--rate 12 --duration 24h   = 1,036,800 events (~1M events/day target)
+//	--rate 100 --duration 1h   = 360K events (faster verification)
+//	--rate 500 --burst-for 30s = chaos-spike test
 func main() {
 	brokers := flag.String("brokers", envOr("KAFKA_BROKERS", "localhost:9092"), "comma-separated Kafka brokers")
 	topic := flag.String("topic", envOr("KAFKA_TOPIC", "events"), "topic")
@@ -108,10 +109,10 @@ func main() {
 			log.Printf("DONE produced=%d duplicates=%d duration=%.1fs avg_rps=%.1f", p, d, elapsed, float64(p)/elapsed)
 			if *report != "" {
 				j, _ := json.MarshalIndent(map[string]any{
-					"produced":            p,
-					"injected_duplicates": d,
-					"duration_seconds":    elapsed,
-					"avg_rps":             float64(p) / elapsed,
+					"produced":             p,
+					"injected_duplicates":  d,
+					"duration_seconds":     elapsed,
+					"avg_rps":              float64(p) / elapsed,
 					"per_day_extrapolated": float64(p) / elapsed * 86400,
 				}, "", "  ")
 				_ = os.WriteFile(*report, j, 0o644)

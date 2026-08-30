@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -27,7 +26,6 @@ import (
 //
 // Provides the comparison point against which the optimized consumer's
 // duplicate-reduction, latency, and chaos-resilience metrics are measured.
-// Keep this code SIMPLE. Resist the urge to optimize.
 const consumerLabel = "baseline"
 
 func main() {
@@ -47,7 +45,13 @@ func main() {
 		MinBytes:       1,
 		MaxBytes:       10 * 1024 * 1024,
 		CommitInterval: 100 * time.Millisecond,
-		StartOffset:    kafka.LastOffset,
+		StartOffset:    kafka.FirstOffset,
+		// Without this, a group that joins before its topic exists is assigned
+		// zero partitions and stays Stable with zero partitions forever: the
+		// group only re-evaluates the partition list on rebalance. Watching for
+		// partition changes forces a rejoin when partitions appear.
+		WatchPartitionChanges: true,
+		ErrorLogger:           kafka.LoggerFunc(log.Printf),
 	})
 	defer reader.Close()
 
@@ -79,7 +83,6 @@ func main() {
 }
 
 func processNaively(ctx context.Context, ev *queue.Event, downstreamURL string) {
-	start := time.Now()
 	// Fresh client per request: no connection reuse, DNS resolved every time.
 	client := &http.Client{Timeout: 5 * time.Second}
 	body, _ := json.Marshal(map[string]string{
@@ -109,7 +112,17 @@ func processNaively(ctx context.Context, ev *queue.Event, downstreamURL string) 
 		return
 	}
 	metrics.EventsDelivered.WithLabelValues(consumerLabel).Inc()
-	metrics.DeliveryLatency.WithLabelValues(consumerLabel).Observe(time.Since(start).Seconds())
+	metrics.DeliveryLatency.WithLabelValues(consumerLabel).Observe(sinceEvent(ev.Timestamp))
+}
+
+// sinceEvent matches the optimized consumer's definition so the two lanes are
+// comparable: end-to-end age of the event at delivery, clamped at zero.
+func sinceEvent(stamped time.Time) float64 {
+	d := time.Since(stamped).Seconds()
+	if d < 0 {
+		return 0
+	}
+	return d
 }
 
 func envOr(k, def string) string {
@@ -117,11 +130,4 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
-}
-func mustAtoi(s string) int {
-	i, err := strconv.Atoi(s)
-	if err != nil {
-		log.Fatalf("bad int %q: %v", s, err)
-	}
-	return i
 }

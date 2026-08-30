@@ -19,7 +19,7 @@ type Event struct {
 	AttemptNumber  int             `json:"attempt_number"`
 }
 
-func (e *Event) Marshal() ([]byte, error)   { return json.Marshal(e) }
+func (e *Event) Marshal() ([]byte, error) { return json.Marshal(e) }
 func Unmarshal(b []byte) (*Event, error) {
 	var e Event
 	if err := json.Unmarshal(b, &e); err != nil {

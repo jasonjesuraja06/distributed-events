@@ -51,7 +51,7 @@ var (
 	DeliveryLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "delivery_latency_seconds",
-			Help:    "End-to-end latency: event timestamp -> successful downstream ack.",
+			Help:    "End-to-end latency: producer event timestamp -> successful downstream ack.",
 			Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 0.8, 1.2, 2.0, 3.0, 5.0, 10.0},
 		},
 		[]string{"consumer"},

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -22,7 +23,10 @@ var (
 	chaosMode   atomic.Bool // when true, fail rate jumps to 0.6
 	deliveries  atomic.Uint64
 	idempotency atomic.Uint64 // count of unique IdempotencyKey seen
-	seen        = map[string]struct{}{}
+
+	// seen is touched by every request goroutine, so it needs the mutex.
+	seenMu sync.Mutex
+	seen   = map[string]struct{}{}
 )
 
 type req struct {
@@ -64,14 +68,16 @@ func main() {
 	})
 	http.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]uint64{
-			"deliveries":      deliveries.Load(),
-			"unique_keys":     idempotency.Load(),
+			"deliveries":  deliveries.Load(),
+			"unique_keys": idempotency.Load(),
 		})
 	})
 	http.HandleFunc("/reset", func(w http.ResponseWriter, r *http.Request) {
 		deliveries.Store(0)
 		idempotency.Store(0)
+		seenMu.Lock()
 		seen = map[string]struct{}{}
+		seenMu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	})
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
@@ -99,10 +105,12 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	deliveries.Add(1)
+	seenMu.Lock()
 	if _, ok := seen[body.IdempotencyKey]; !ok {
 		seen[body.IdempotencyKey] = struct{}{}
 		idempotency.Add(1)
 	}
+	seenMu.Unlock()
 	_ = json.NewEncoder(w).Encode(resp{
 		Status:         "ok",
 		EventID:        body.EventID,
